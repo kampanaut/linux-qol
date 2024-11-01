@@ -1,0 +1,604 @@
+#! /bin/bash
+
+main() {
+	declare -A sids_index
+	declare -A keys_index
+
+	function sids_index_init() {
+		declare -i index=1
+
+		# create a dictionary instead :( arrays are so fucked
+		for sid in $( ls ~/.ssh/sid );
+		do
+			sids_index[$index]=$sid
+			index+=1
+		done
+	}
+
+	function keys_index_init() {
+		declare -i index=1
+
+		# create a dictionary instead :( arrays are so fucked
+		for keyfile in ~/.ssh/*;
+		do
+			if [[ -n $(echo $keyfile | grep -E -v '.pub|known_hosts|sid') ]];
+			then
+				keys_index[$index]=$keyfile
+				index+=1
+			fi
+		done
+	}
+
+	sid_dir_cleaner() {
+		current_sock=$SSH_AUTH_SOCK
+		current_pid=$SSH_AGENT_PID
+
+		sids=( `ls ~/.ssh/sid` )
+
+		for sid in ${sids[@]};
+		do
+			test -r "$HOME/.ssh/sid/$sid" && \
+				eval "$(<$HOME/.ssh/sid/$sid)" > /dev/null
+			ssh-add -l &> /dev/null
+
+			if [[ $? == 2 ]];
+			then
+				rm "$HOME/.ssh/sid/$sid";
+				if [[ -n $current_sock && -n $current_pid && "$current_sock" == "$SSH_AUTH_SOCK" && "$current_pid" == "$SSH_AGENT_PID" ]];
+				then
+					( core_deattach $SSH_AGENT_PID ) &> /dev/null
+					unset current_sock
+				fi
+			fi
+		done
+
+		if [[ -n $current_sock ]];
+		then
+			SSH_AGENT_PID=$current_pid
+			SSH_AUTH_SOCK=$current_sock
+		else
+			unset SSH_AGENT_PID
+			unset SSH_AUTH_SOCK
+		fi
+	}
+
+	prompt_sshkey_chooser() {
+		used_keys=()
+		ssh-add -l &> /dev/null
+		if [[ $? == 2 ]];
+		then
+			used_keys=${keys_index[@]}
+		else
+			IFS=$'\n' used_keys=($(ssh-add -L));
+		fi
+
+		IFS=$'\n' all_keys=$(cat ~/.ssh/*.pub);
+
+		declare -i index
+		index=1
+		declare -A is_used
+		echo -e "[\e[0;32mkey:chooser\e[0m] ———————————————————————————————————————————————————————————————————————————————————————————"
+		
+		for used in ${used_keys[@]};
+		do
+			is_used[$used]=1;
+		done
+
+		for key in ~/.ssh/*.pub;
+		do 
+			content=$(cat $key)
+			if [[ -v is_used[$content] ]];
+			then
+				echo -e "* ( ${key##/home/aunkquoi/.ssh/} | [$index] )"
+				echo -e "\e[1;33m$content\e[0m"
+			else
+				echo -e "( ${key##/home/aunkquoi/.ssh/} | [$index] )"
+				echo -e "$content"
+			fi
+			index+=1
+		done
+		echo -e "—————————————————————————————————————————————————————————————————————————————————————————————————————————"
+	}
+
+	prompt_sid_chooser() {
+		# user can input multiple label inputs
+		sid_list=( `ls ~/.ssh/sid` )
+		declare -i index=1
+		echo -e "[\e[0;32msid:chooser\e[0m] ———————————————————————————————————————————————————————————————————————————————————————————"
+
+		if [[ ${#sid_list[@]} == 0 ]];
+		then
+			echo -e "                                 [ there are no running ssh-agents ]                  "
+			echo -e "—————————————————————————————————————————————————————————————————————————————————————————————————————————"
+			return 1
+		fi
+
+		for sid in ${sid_list[@]};
+		do
+			if [[ $(( $index % 6 )) == 0 ]];
+			then
+				if [[ $sid == $SSH_AGENT_PID ]]; 
+				then 
+					# this sid is currently attached.
+					echo -e "   • \e[1;33m$sid\e[0m [$index] "
+				else
+					echo -e "   • $sid [$index] "
+				fi
+			else
+				if [[ $sid == $SSH_AGENT_PID ]]; 
+				then 
+					# this sid is currently attached.
+					echo -en "   • \e[1;33m$sid\e[0m [$index] "
+				else
+					echo -en "   • $sid [$index] "
+				fi
+			fi
+			index+=1
+		done
+		if [[ $(( ($index-1) % 6 )) == 0 ]];
+		then
+			echo -e "—————————————————————————————————————————————————————————————————————————————————————————————————————————"
+		else
+			echo -e "\n—————————————————————————————————————————————————————————————————————————————————————————————————————————"
+		fi
+		unset index
+	}
+
+	siddir_init() {
+		if [[ ! -d ~/.ssh/sid ]];
+		then 
+			echo -e "[sid:init] ~/.ssh/sid don't exist! creating ~/.ssh/sid to keep track of created ssh-agents by this script!";
+			echo -e "[sid:init] => mkdir ~/.ssh/sid";
+			mkdir ~/.ssh/sid;
+		fi
+	}
+
+	yes_quit() {
+		while true;
+		do
+			echo -ne "$1";
+			read confirmation;
+			if [[ "$confirmation" == "YES" || "$confirmation" == "yes" || "$confirmation" == "Y" || "$confirmation" == "y" ]];
+			then
+				return 0
+			fi
+			if [[ "$confirmation" == "NO" || "$confirmation" == "no" || "$confirmation" == "N" || "$confirmation" == "n" ]];
+			then
+				return 1
+			fi
+		done
+	}
+
+	core_start() {
+		# if there is already an ssh-agent attached to terminal
+		if [[ -n $SSH_AGENT_PID ]];
+		then
+			# then ask if you intend to replace the already attached agent. The agent will be deattached not killed.
+			echo -e "[core:start] ssh-agent process pid {$SSH_AGENT_PID} is already attached and must be deattached to proceed."
+			if yes_quit "[prompt] do you intend to overwrite/deattach? [y/n] >>> ";
+			then
+				core_deattach $SSH_AGENT_PID
+			else
+				echo -e "[core:start] exiting program..."
+				return 0;
+			fi
+		fi
+		core_create_agent
+		prompt_sid_chooser
+		if [[ -n ${@/start/} ]]; # check if there are arguments after "start argument."
+		then
+			core_add ${@/start/}
+		fi
+	}
+
+	core_create_agent() {
+		siddir_init # initiate the sid directory
+
+		ssh_out="$(ssh-agent -s)"
+		ssh_pid=$(echo "$ssh_out" | sed -n 3p | awk '{print $4}');
+
+		eval "$ssh_out" &> /dev/null
+
+		(umask 066; echo "$ssh_out" > ~/.ssh/sid/${ssh_pid/;/})
+		echo -e "[core:start] new ssh session {$SSH_AGENT_PID} started in current terminal."
+	}
+
+	core_deattach() {
+		if [[ -n $1 ]];
+		then
+			ssh_agent_pid=$1;
+		else
+			ssh_agent_pid=$SSH_AGENT_PID;
+		fi
+
+		unset SSH_AUTH_SOCK;
+		unset SSH_AGENT_PID;
+
+		echo -e "[core:deattach] ssh-agent {$ssh_agent_pid} deattached." 
+	}
+
+	core_attach() {
+		sids_index_init
+		if [[ $# == 0 ]];
+		then
+			prompt_sid_chooser
+			
+			if [[ $? != 0 ]];
+			then
+				return 0
+			fi
+				
+
+			echo -en "[core:attach] enter the ssh-agent pid/label >>> ";
+			read pid_input;
+
+			if [[ -f ~/.ssh/sid/${sids_index[$pid_input]} ]];
+			then
+				if [[ ${sids_index[$pid_input]} == $SSH_AGENT_PID ]];
+				then 
+					echo -e "[core:attach] current pid ${sids_index[$pid_input]} [$pid_input] -- already attached"
+				else
+					if [[ -n $SSH_AGENT_PID ]];
+					then
+						echo -e "[core:attach] pid ${sids_index[$pid_input]} [$pid_input] -- deattaching current { $SSH_AGENT_PID }"
+						core_deattach
+					fi
+					echo -e "[core:attach] pid ${sids_index[$pid_input]} [$pid_input] -- attaching"
+					eval `cat ~/.ssh/sid/${sids_index[$pid_input]}` &> /dev/null
+				fi
+			else
+				echo -e "[core:attach] input { $pid_input } is not valid -- skipping"
+			fi
+			prompt_sid_chooser
+		elif [[ $# == 1 && -v sids_index[$1] ]];
+		then
+			if [[ ${sids_index[$1]} == $SSH_AGENT_PID ]];
+			then 
+				echo -e "[core:attach] current pid ${sids_index[$1]} [$1] -- already attached"
+			else
+				if [[ -n $SSH_AGENT_PID ]];
+				then
+					echo -e "[core:attach] pid ${sids_index[$1]} [$1] -- deattaching current { $SSH_AGENT_PID }"
+					core_deattach
+				fi
+				echo -e "[core:attach] pid ${sids_index[$1]} [$1] -- attaching"
+				eval `cat ~/.ssh/sid/${sids_index[$1]}` &> /dev/null
+			fi
+			prompt_sid_chooser
+		fi
+	}
+
+	function core_add() {
+		keys_index_init
+
+		args=( ${=@/add/} ) 
+
+		inputs=()
+		if [[ ${#args[@]} == 0 ]];
+		then
+			declare -A is_used;
+			
+			prompt_sshkey_chooser;
+
+			IFS=$'\n' used_keys=($(ssh-add -L));
+
+			for used in ${used_keys[@]};
+			do
+				is_used[$used]=1;
+			done
+
+			echo -en "[core:add] enter the filename or label >>> ";
+			read keys_input;
+			IFS=' ' keys_input_arr=( ${=keys_input} )
+
+			for key in ${keys_input_arr[@]};
+			do 
+				if [[ -f ~/.ssh/$key ]];
+				then
+					if [[ -v $is_used[$(cat "$HOME/.ssh/$key.pub")] ]];
+					then
+						echo -e "[core:add] { $key } is already attached"
+					else
+						echo -e "[core:add] attaching { $key }"
+						inputs+=( "$key" )
+					fi
+				elif [[ -f ${keys_index[$key]} ]];
+				then
+					if [[ -v $is_used[$(cat "${keys_index[$key]}.pub")] ]];
+					then
+						echo -e "[core:add] { ${keys_index[$key]} } is already attached"
+					else
+						echo -e "[core:add] attaching { ${keys_index[$key]} } key"
+						inputs+=( "${keys_index[$key]}" )
+					fi
+				else
+					echo -e "[core:add] { $key } is not even a valid key!"
+				fi
+			done
+		elif [[ $1 == "--all" ]];
+		then
+			echo -e "[core:add] adding all available keys in ~/.ssh"
+			inputs=( `ls ~/.ssh/sid` )
+		else
+			inputs=$args
+		fi
+
+		for identity in ${inputs[@]} ;
+		do 
+			if [[ -f $keys_index[$identity] || -f ~/.ssh/$identity || -f $identity ]];
+			then
+				ssh-add ~/.ssh/$identity &> /dev/null;
+				if [[ $? == 1 ]];
+				then
+					ssh-add $identity &> /dev/null;
+					if [[ $? == 1 ]];
+					then
+						ssh-add $keys_index[$identity] &> /dev/null;
+					fi
+				fi
+				echo -e "\e[0m[\e[1;33mcore:add\e[0m] identity added -- \e[1;33m$identity\e[0m";
+			else
+				echo -e "[core:add] input { $identity } is not valid -- skipping"
+			fi
+		done
+		prompt_sshkey_chooser
+	}
+
+	core_pop() {
+		keys_index_init
+
+		args=( ${=@/pop/} ) 
+
+		inputs=()
+		if [[ ${#args[@]} == 0 ]];
+		then
+			declare -A is_used;
+			
+			prompt_sshkey_chooser;
+
+			IFS=$'\n' used_keys=($(ssh-add -L));
+
+			for used in ${used_keys[@]};
+			do
+				is_used[$used]=1;
+			done
+
+			echo -en "[core:pop] enter the filename or label >>> ";
+			read keys_input;
+			IFS=' ' keys_input_arr=( ${=keys_input} )
+
+			for key in ${keys_input_arr[@]};
+			do 
+				if [[ -f ~/.ssh/$key ]];
+				then
+					if [[ -v $is_used[$(cat "$HOME/.ssh/$key.pub")] ]];
+					then
+						echo -e "[core:pop] removing { $key } "
+						inputs+=( "$key" )
+					else
+						echo -e "[core:pop] { $key } is not loaded"
+					fi
+				elif [[ -f ${keys_index[$key]} ]];
+				then
+					if [[ -v $is_used[$(cat "${keys_index[$key]}.pub")] ]];
+					then
+						echo -e "[core:pop] removing { ${keys_index[$key]} } "
+						inputs+=( "${keys_index[$key]}" )
+					else
+						echo -e "[core:pop] ${keys_index[$key]} is not loaded"
+					fi
+				else
+					echo -e "[core:pop] { $key } is not even a valid key!"
+				fi
+			done
+		elif [[ $1 == "--all" ]];
+		then
+			echo -e "[core:pop] removing all keys"
+			inputs=( `ls ~/.ssh/sid` )
+		else
+			inputs=$args
+		fi
+
+		for identity in ${inputs[@]} ;
+		do 
+			if [[ -f ~/.ssh/$identity || -f $identity ]];
+			then
+				ssh-add -d ~/.ssh/$identity &> /dev/null;
+				if [[ $? == 1 ]];
+				then
+					ssh-add -d $identity &> /dev/null;
+				fi
+				echo -e "\e[0m[\e[1;31mcore:add\e[0m] identity removed -- \e[1;31m$identity\e[0m";
+			else
+				echo -e "[core:add] input { $identity } is not valid -- skipping"
+			fi
+		done
+		prompt_sshkey_chooser
+	}
+
+	core_shutdown() {
+		current_pid=$SSH_AGENT_PID
+		if [[ -f ~/.ssh/sid/$current_pid ]];
+		then
+			echo -e "[core:shutdown] removing currently running ssh-agent proc eval file." # removing existent ssh-agent proc eval
+			rm ~/.ssh/sid/$current_pid
+		else
+			echo -e "[core:shutdown] ssh-agent {$current_pid} doesn't have proc eval file." # removing existent ssh-agent proc eval
+		fi
+		eval `ssh-agent -k` &> /dev/null;
+		echo -e "[core:shutdown] ssh-agent {$current_pid} has been terminated and deattached"
+	}
+
+	function core_kill() {
+		sids_index_init
+		if [[ $# == 1 ]]; # print prompt to let user browse existing ssh-agents
+		then
+			prompt_sid_chooser
+			echo -en "[core:kill] enter the ssh-agent pid/label >>> ";
+			read pids_input;
+			IFS=' ' pids_input_arr=( ${=pids_input} )
+
+			for pid in ${pids_input_arr[@]};
+			do 
+				if [[ -f ~/.ssh/sid/${sids_index[$pid]} ]];
+				then
+					if [[ ${sids_index[$pid]} == $SSH_AGENT_PID ]];
+					then 
+						echo -e "[core:kill] current pid { ${sids_index[$pid]} [$pid] } -- shutting down"
+						core_shutdown
+					else
+						echo -e "[core:kill] pid { ${sids_index[$pid]} [$pid] } -- killing session"
+						kill -9 ${sids_index[$pid]}
+						rm ~/.ssh/sid/${sids_index[$pid]}
+					fi
+				else
+					echo -e "[core:kill] input { $pid } is not valid -- skipping"
+				fi
+			done
+		else
+			for pid in ${@/kill/};
+			do
+				if [[ -f ~/.ssh/sid/$pid ]];
+				then
+					if [[ ${sids_index[$pid]} == $SSH_AGENT_PID ]];
+					then 
+						echo -e "[core:kill] current pid { ${sids_index[$pid]} [$pid] } -- shutting down"
+						core_shutdown
+					elif [[ -n $(ps x | grep ssh-agent | grep $pid) ]];
+					then
+						echo -e "[core:kill] pid $pid -- killing session"
+						kill -9 $pid
+						rm ~/.ssh/sid/$pid 
+					fi
+				else
+					echo -e "[core:kill] input { $pid } is not valid -- skipping"
+				fi
+			done
+		fi
+	}
+
+	validate_session() {
+		if [[ -d ~/.ssh/sid/$SSH_AGENT_PID ]];
+		then
+			echo -e "[core:session] there is no existing ssh-agent attached"
+			return 1
+		fi
+
+		test -r ~/.ssh/sid/$SSH_AGENT_PID && \
+			eval "$(<~/.ssh/sid/$SSH_AGENT_PID)" > /dev/null
+		ssh-add -l &> /dev/null
+
+		if [[ $? == 2 ]];
+		then
+			echo -e "[core:session] ssh-agent pid { $SSH_AGENT_PID } is not running anymore."
+			return 1
+		else
+			return 0 
+		fi
+	}
+
+	# clean off any untracked ssh-agent procs
+	 sid_dir_cleaner
+
+	# check the first function arguments first
+	if [[ $1 == "start" ]]; # for starting a new ssh-agent process, and also can accept inputs for ssh key name to add to process after starting a new-ssh agent
+	then
+		core_start
+	elif [[ $1 == "shutdown" ]]; # for closing an ssh-agent process currently attached to terminal
+	then
+		if validate_session;
+		then
+			core_shutdown
+		else
+			return 1
+		fi
+	elif [[ $1 == "kill" ]]; # for closing a ssh-agent process by label given by the prompt or through by provision pid number argument
+	then
+		core_kill $@
+	elif [[ $1 == "add" ]]; # add one or more identity key with a name under the ssh-agent process attached
+	then
+		if validate_session;
+		then
+			core_add $@
+		else
+			return 1
+		fi
+	elif [[ $1 == "pop" ]]; # remove an identity key with a name under the ssh-agent process attached
+	then
+		if validate_session;
+		then
+			core_pop $@
+		else
+			return 1
+		fi
+	elif [[ $1 == "attach" ]]; # attach an extrinsic running ssh-agent process to terminal. You can skip the prompt by providing a pid address instead
+	then
+		core_attach ${@/attach/}
+	elif [[ $1 == "deattach" ]]; # remove the currently attached ssh-agent process from terminal
+	then
+		validate_session
+		core_deattach
+	elif [[ $1 == "list" ]]; # print out the ssh keys in ~/.ssh
+	then
+		prompt_sid_chooser
+	elif [[ $# == 0 ]]; # just print out the current status. 
+	then
+		siddir_init
+		echo -e "[\e[1;33m SSHIT - ssh it \e[0m]\n";
+		if prompt_sid_chooser;
+		then 
+			echo ""
+			prompt_sshkey_chooser
+		fi
+		# print out the current ssh-agent process pid
+		# then print out the other ssh-agent process pid and make sure to associate them with numbers that will be applied to future prompts
+		# print out the identities currently attach
+	elif [[ $# -gt 1 ]];
+	then
+		echo -e "[\e[0;31merror\e[1;0m] arguments are involid! valid first arguments: start; shutdown; kill; add; pop; attach; deattach; list. \e[1;31mone\e[0m!"
+	fi
+	unset sids_index
+	unset keys_index
+	unset index
+	unset sid
+	unset keyfile
+	unset current_sock	
+	unset current_pid
+	unset used_keys
+	unset all_keys
+	unset is_used
+	unset used
+	unset key
+	unset content
+	unset sid_list
+	unset confirmation
+	unset ssh_out
+	unset ssh_pid
+	unset ssh_agent_pid
+	unset pid_input
+	unset args
+	unset keys_input
+	unset keys_input_arr
+	unset inputs
+	unset identity
+
+	unset -f main
+	unset -f sids_index_init
+	unset -f keys_index_init
+	unset -f sid_dir_cleaner
+	unset -f prompt_sshkey_chooser
+	unset -f prompt_sid_chooser
+	unset -f siddir_init
+	unset -f yes_quit
+	unset -f core_start
+	unset -f core_create_agent
+	unset -f core_deattach
+	unset -f core_attach
+	unset -f core_add
+	unset -f core_pop
+	unset -f core_shutdown
+	unset -f core_kill
+	unset -f validate_session
+}
+
+main $@

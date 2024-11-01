@@ -1,0 +1,24 @@
+export FZF_DEFAULT_OPTS='--cycle --reverse --border --header "Choose a project directory or tmux session"'
+
+export STATIC_PROJDIRS=("$HOME/scripts")
+export DYNAMIC_PROJDIRS=("$HOME/Projects")
+
+mkprojectdirs() {
+	output="${(j:,:)STATIC_PROJDIRS[@]},"
+	base_dirs=(${DYNAMIC_PROJDIRS[@]})
+
+	for dir in ${base_dirs[@]}; do 
+		subdirs=$(find $dir -mindepth 1 -maxdepth 1 -type d | tr '\n' ',')
+		output="${output[@]}${subdirs[@]}"
+	done
+
+	echo $output
+}
+
+export PROJECTS_DIRS=($(mkprojectdirs))
+
+alias sshit="source sshit"
+alias tmux="tmux -2"
+alias sessionizer="source sessionizer"
+alias tkbo="source takbo"
+alias mkproj="source mkproj"
