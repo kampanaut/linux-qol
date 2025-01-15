@@ -2,10 +2,44 @@
 
 session_name=$(echo $1 | sed -n 's/.*{\(.*\)}.*/\1/p' | sed 's/^[ \t]*//;s/[ \t]*$//'); 
 if [[  -n $session_name && -n "$(tmux list-sessions -F "#{session_name}" | grep "$session_name")"  ]]; then 
-	echo -e "$(tmux list-sessions -F "[32m{ #S }[0m\n      |    [34m#I[0m windows (current: [33m#W[0m, last activity: ([35m#{session_activity}[0m)\n      |    session_created: ([35m#{session_created}[0m) host: [ [33m#{pane_title}[0m ]\n      |" 2>/dev/null)" | grep -A 3 $1;
+
+	raw_details=$(tmux display-message -p -t $session_name "#{window_index},#{window_name},#{session_activity},#{session_created},#{pane_title}")
+	
+	# Create array from comma-separated values
+	IFS=',' read -rA details <<< "$raw_details";
+	
+	window_index="${details[1]}"
+	window_name="${details[2]}"
+	activity="${details[3]}"
+	created="${details[4]}"
+	pane_title="${details[5]}"
+
+	activity_date=$(date -d "@${activity}" "+%A at %I:%M %p" 2>/dev/null || echo "unknown")
+	created_date=$(date -d "@${created}" "+%A at %I:%M %p" 2>/dev/null || echo "unknown")
+
+
+	formatted_details=$(cat << EOF
+     │  \e[34m$window_index\e[0m windows (current: \e[33m$window_name\e[0m), last activity: (\e[35m$activity_date\e[0m)
+     │  session_created: (\e[35m$created_date\e[0m) host: [ \e[33m$pane_title\e[0m ]
+EOF
+)
+
+	echo -e "{ [32m$session_name[0m }\n$formatted_details"
 
 	tmuxpath="$(tmux display-message -t $session_name -p '#{pane_current_path}')";
-	tree -C -L 3 -I "node_modules|.git" $tmuxpath | head -n 26; 
+
+	pane_pid=$(tmux display-message -p -t $session_name "#{pane_pid}")
+	current_program=$(ps -o comm= -p $(pgrep -P $pane_pid) 2>/dev/null | tail -n1)
+
+	[[ -z "$current_program" ]] && current_program=$(tmux display-message -p -t $session_name "#{pane_current_command}")
+	if [[ "$current_program" == "nvim-handler" ]]; then
+		current_program="nvim (handler)"
+	fi
+	echo -e "\n━━━━━━━━ { \e[34m${current_program}\e[0m } ━━ ⟬ \e[35m${tmuxpath}\e[0m ⟭ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m\n";
+    
+    tmux capture-pane -p -e -t "$session_name" | head -n 40
+
+	echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m\n"
 else 
 	source ~/.globals
 
@@ -49,4 +83,3 @@ else
 	done; 
 	echo "No preview available"; 
 fi;
-

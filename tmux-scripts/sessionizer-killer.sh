@@ -7,7 +7,7 @@ list_all() {
 
 # Use fzf to choose an option with preview
 CHOICE=$(echo -e "$(list_all)" | fzf --print-query --header "[KILLER] Select Project or Session to kill (Press Enter for new session)" --preview-window=right:50%\
-	--preview "~/.config/tmux/scripts/fzf/fzf-start-chooser-preview-base.sh $1")
+	--preview "~/.config/tmux/scripts/fzf/fzf-start-chooser-preview-base.sh {}")
 
 
 if [[ -z $(echo $CHOICE | tr -d '[:space:]') ]]; then 

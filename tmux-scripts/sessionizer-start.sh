@@ -18,7 +18,7 @@ list_all() {
 		echo "$sessions"
 	fi
 	for dir in "${PROJECTS_DIRS[@]}"; do
-		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 -type d -exec printf '%s,' {} + 2>/dev/null)"
+		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) -exec test -d {} \; -exec printf '%s,' {} + 2>/dev/null)"
 	done
 
 	output=${output[1,-2]}
@@ -51,7 +51,7 @@ list_all() {
 
 setup_uniques() {
 	for dir in "${PROJECTS_DIRS[@]}"; do
-		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 -type d -exec printf '%s,' {} + 2>/dev/null)"
+		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) -exec test -d {} \; -exec printf '%s,' {} + 2>/dev/null)"
 	done
 
 	output=${output[1,-2]}

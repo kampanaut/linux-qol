@@ -16,7 +16,7 @@ list_all() {
 		echo "$sessions"
 	fi
 	for dir in "${PROJECTS_DIRS[@]}"; do
-		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 -type d -exec printf '%s,' {} + 2>/dev/null)"
+		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) -exec test -d {} \; -exec printf '%s,' {} + 2>/dev/null)"
 	done
 
 	output=${output[1,-2]}
@@ -49,7 +49,7 @@ list_all() {
 
 setup_uniques() {
 	for dir in "${PROJECTS_DIRS[@]}"; do
-		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 -type d -exec printf '%s,' {} + 2>/dev/null)"
+		output="$output$(find "$dir" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) -exec test -d {} \; -exec printf '%s,' {} + 2>/dev/null)"
 	done
 
 	output=${output[1,-2]}
@@ -69,7 +69,7 @@ setup_uniques() {
 }
 
 # Use fzf to choose an option with preview
-CHOICE=$(echo -e "$(list_all)" | fzf --print-query --header "Select Project or Session (Press Enter for new session)" --preview-window=right:50%\
+CHOICE=$(echo -e "$(list_all)" | fzf --print-query --header "| $(echo -e $(tmux display-message -p '#S')) | Jump to a another session or a directory" --preview-window=right:50%\
 	--preview "~/.config/tmux/scripts/fzf/fzf-start-chooser-preview-base.sh {}")
 
 
